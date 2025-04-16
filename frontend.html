@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI-Powered Container Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-900 text-white font-sans">
+
+  <!-- Login Form -->
+  <div id="loginForm" class="flex flex-col items-center justify-center min-h-screen bg-gray-900">
+    <div class="p-8 bg-gray-800 rounded-xl shadow-lg w-80">
+      <h2 class="text-2xl font-bold mb-4 text-white text-center">Login</h2>
+      <input id="username" type="text" placeholder="Username" class="w-full p-2 mb-3 rounded text-black" />
+      <input id="password" type="password" placeholder="Password" class="w-full p-2 mb-3 rounded text-black" />
+      <button onclick="login()" class="bg-blue-600 px-4 py-2 rounded w-full">Login</button>
+      <p id="loginError" class="text-red-400 mt-2 text-center hidden">Invalid credentials</p>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="dashboard" style="display: none;" class="p-6">
+    <h1 class="text-3xl font-bold mb-4">AI-Powered Container Dashboard</h1>
+
+    <!-- Controls -->
+    <div class="mb-6 grid grid-cols-2 gap-4">
+      <div>
+        <h2 class="text-xl font-semibold">NGINX Controls</h2>
+        <button onclick="controlContainer('nginx', 'start')" class="bg-green-600 px-4 py-1 rounded">Start</button>
+        <button onclick="controlContainer('nginx', 'stop')" class="bg-yellow-500 px-4 py-1 rounded">Stop</button>
+        <button onclick="controlContainer('nginx', 'restart')" class="bg-blue-600 px-4 py-1 rounded">Restart</button>
+        <span id="nginxStatus" class="ml-2 text-sm"></span>
+      </div>
+      <div>
+        <h2 class="text-xl font-semibold">MySQL Controls</h2>
+        <button onclick="controlContainer('mysql', 'start')" class="bg-green-600 px-4 py-1 rounded">Start</button>
+        <button onclick="controlContainer('mysql', 'stop')" class="bg-yellow-500 px-4 py-1 rounded">Stop</button>
+        <button onclick="controlContainer('mysql', 'restart')" class="bg-blue-600 px-4 py-1 rounded">Restart</button>
+        <span id="mysqlStatus" class="ml-2 text-sm"></span>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="grid grid-cols-2 gap-6 mb-8">
+      <div class="bg-gray-800 p-4 rounded-xl">
+        <h2 class="text-xl font-semibold mb-2">NGINX CPU Usage (%)</h2>
+        <canvas id="nginxCpuChart"></canvas>
+      </div>
+      <div class="bg-gray-800 p-4 rounded-xl">
+        <h2 class="text-xl font-semibold mb-2">NGINX Memory Usage (MB)</h2>
+        <canvas id="nginxMemChart"></canvas>
+      </div>
+      <div class="bg-gray-800 p-4 rounded-xl">
+        <h2 class="text-xl font-semibold mb-2">MySQL CPU Usage (%)</h2>
+        <canvas id="mysqlCpuChart"></canvas>
+      </div>
+      <div class="bg-gray-800 p-4 rounded-xl">
+        <h2 class="text-xl font-semibold mb-2">MySQL Memory Usage (MB)</h2>
+        <canvas id="mysqlMemChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Logs -->
+    <div class="bg-gray-800 p-4 rounded-xl shadow-md mb-6">
+      <h2 class="text-xl font-semibold mb-3">Container Logs</h2>
+      <pre id="logDisplay" class="text-sm bg-gray-900 p-2 rounded overflow-y-auto max-h-64"></pre>
+    </div>
+  </div>
+
+  <!-- Toasts -->
+  <div id="toastContainer" class="fixed top-5 right-5 z-50 space-y-2"></div>
+
+  <!-- Scripts -->
+  <script>
+    const labels = [];
+    let lastStatuses = {};
+
+    const makeChart = (ctx, label, color) => new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: [{ label, data: [], borderColor: color, tension: 0.2 }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+
+    const nginxCpuChart = makeChart(document.getElementById("nginxCpuChart"), "NGINX CPU %", "#4ade80");
+    const nginxMemChart = makeChart(document.getElementById("nginxMemChart"), "NGINX Mem MB", "#22d3ee");
+    const mysqlCpuChart = makeChart(document.getElementById("mysqlCpuChart"), "MySQL CPU %", "#facc15");
+    const mysqlMemChart = makeChart(document.getElementById("mysqlMemChart"), "MySQL Mem MB", "#f472b6");
+
+    function showToast(msg, type = "error") {
+      const toast = document.createElement("div");
+      toast.className = `px-4 py-2 rounded text-sm shadow-md ${type === "error" ? "bg-red-600" : "bg-green-600"}`;
+      toast.textContent = msg;
+      document.getElementById("toastContainer").appendChild(toast);
+      setTimeout(() => toast.remove(), 4000);
+    }
+
+    async function login() {
+      const user = document.getElementById("username").value;
+      const pass = document.getElementById("password").value;
+
+      const res = await fetch("http://localhost:5000/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ username: user, password: pass })
+      });
+
+      if (res.ok) {
+        document.getElementById("loginForm").style.display = "none";
+        document.getElementById("dashboard").style.display = "block";
+        fetchStats(); fetchLogs();
+        setInterval(fetchStats, 3000);
+        setInterval(fetchLogs, 5000);
+        showToast("Login successful!", "success");
+      } else {
+        document.getElementById("loginError").classList.remove("hidden");
+      }
+    }
+
+    async function fetchStats() {
+      try {
+        const res = await fetch("http://localhost:5000/autoheal/status", {
+          credentials: "include"
+        });
+        const data = await res.json();
+        const now = new Date().toLocaleTimeString();
+        if (labels.length > 15) labels.shift();
+        labels.push(now);
+
+        const nginx = [...data].reverse().find(d => d.container === "nginx");
+        const mysql = [...data].reverse().find(d => d.container === "mysql");
+
+        if (!nginx || !mysql) return;
+
+        [nginxCpuChart, nginxMemChart, mysqlCpuChart, mysqlMemChart].forEach(chart => {
+          if (chart.data.labels.length > 15) {
+            chart.data.labels.shift();
+            chart.data.datasets[0].data.shift();
+          }
+        });
+
+        nginxCpuChart.data.labels.push(now);
+        nginxCpuChart.data.datasets[0].data.push(nginx.cpu);
+        nginxMemChart.data.labels.push(now);
+        nginxMemChart.data.datasets[0].data.push(nginx.memory);
+        mysqlCpuChart.data.labels.push(now);
+        mysqlCpuChart.data.datasets[0].data.push(mysql.cpu);
+        mysqlMemChart.data.labels.push(now);
+        mysqlMemChart.data.datasets[0].data.push(mysql.memory);
+
+        nginxCpuChart.update();
+        nginxMemChart.update();
+        mysqlCpuChart.update();
+        mysqlMemChart.update();
+
+        document.getElementById("nginxStatus").innerText = `Status: ${nginx.status}`;
+        document.getElementById("mysqlStatus").innerText = `Status: ${mysql.status}`;
+
+        [nginx, mysql].forEach(c => {
+          const prev = lastStatuses[c.container];
+          if (prev !== c.status) {
+            if (c.status === "Crashed" || c.status === "High usage") {
+              showToast(`${c.container} - ${c.status}`, "error");
+            } else if (c.status === "Healthy") {
+              showToast(`${c.container} is back to Healthy`, "success");
+            }
+          }
+          lastStatuses[c.container] = c.status;
+        });
+      } catch (e) {
+        console.error("Stats fetch error:", e);
+      }
+    }
+
+    async function fetchLogs() {
+      try {
+        const res = await fetch("http://localhost:5000/logs", {
+          credentials: "include"
+        });
+        const logs = await res.json();
+        document.getElementById("logDisplay").textContent = logs.join("");
+      } catch (err) {
+        document.getElementById("logDisplay").textContent = "Logs not available.";
+      }
+    }
+
+    async function controlContainer(name, action) {
+      try {
+        const res = await fetch(`http://localhost:5000/control/${name}/${action}`, {
+          method: "POST",
+          credentials: "include"
+        });
+        const msg = await res.text();
+        showToast(`${name} ${action}ed successfully!`, "success");
+      } catch (err) {
+        showToast(`Failed to ${action} ${name}`, "error");
+      }
+    }
+
+    window.onload = () => {
+      // Optionally: you can redirect to login always on refresh.
+    };
+  </script>
+</body>
+</html>
